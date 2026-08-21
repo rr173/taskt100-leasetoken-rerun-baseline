@@ -196,6 +196,8 @@ func (m *Manager) ForceRelease(leaseID, actor string) error {
 }
 
 // Remaining reports the seconds left on a lease and whether it is past expiry.
+// Reaching the deadline (now == expires_at) already counts as expired; the
+// remaining seconds are clamped to 0 at that point rather than going negative.
 func (m *Manager) Remaining(leaseID string) (model.RemainingResponse, error) {
 	var resp model.RemainingResponse
 	l, err := m.GetLease(leaseID)
@@ -205,7 +207,10 @@ func (m *Manager) Remaining(leaseID string) (model.RemainingResponse, error) {
 	now := m.now()
 	resp.LeaseID = leaseID
 	resp.Remaining = l.ExpiresAt - now
-	resp.Expired = now > l.ExpiresAt
+	if resp.Remaining < 0 {
+		resp.Remaining = 0
+	}
+	resp.Expired = now >= l.ExpiresAt
 	return resp, nil
 }
 
