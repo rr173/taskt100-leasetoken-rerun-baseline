@@ -205,8 +205,11 @@ func (m *Manager) Renew(leaseID string, fencingToken int64, ttlSeconds int64) (m
 
 // Release frees a lease. It is idempotent on terminal leases when the fencing
 // token matches: a second release with the matching token succeeds and changes
-// nothing. A token mismatch is always rejected. On the active→released
-// transition the resource fencing_token is bumped by 1.
+// nothing. A token mismatch is always rejected. An active lease that is past
+// its expires_at (sweep hasn't run yet) is rejected as expired: the holder lost
+// authority at expiry and must not flip the row to released ahead of the
+// sweeper. On the active→released transition the resource fencing_token is
+// bumped by 1.
 func (m *Manager) Release(leaseID string, fencingToken int64) error {
 	if leaseID == "" {
 		return errors.New("lease_id must not be empty")
@@ -230,6 +233,13 @@ func (m *Manager) Release(leaseID string, fencingToken int64) error {
 	}
 	if model.IsTerminal(l.Status) {
 		return tx.Commit() // idempotent, no state change
+	}
+	if now > l.ExpiresAt {
+		// Logically expired but not yet swept: the holder lost authority at
+		// expiry and must not retire the row ahead of the sweeper. Leave it
+		// active so Sweep claims the active→expired transition (and the
+		// associated token bump) rather than Release.
+		return ErrLeaseExpired
 	}
 	n, err := m.store.SetLeaseStatus(tx, leaseID, model.StatusActive, model.StatusReleased)
 	if err != nil {
