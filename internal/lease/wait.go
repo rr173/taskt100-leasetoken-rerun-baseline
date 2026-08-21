@@ -57,9 +57,18 @@ func (m *Manager) AcquireWaitContext(ctx context.Context, req model.AcquireWaitR
 		if m.now() >= deadline {
 			return resp, ErrTimeout
 		}
-		// Poll on the wall clock. The fake clock in tests advances Now() in
-		// steps, so the deadline check remains deterministic without real-time
-		// sleeps.
-		time.Sleep(time.Duration(interval) * time.Second)
+		// Pace the poll loop, but stay responsive to cancellation: a context
+		// that is canceled mid-wait must not sleep a whole interval. Select on
+		// ctx.Done() alongside the timer so cancel returns immediately with
+		// context.Canceled. (The fake clock in tests advances Now() in steps, so
+		// the deadline check above stays deterministic; this sleep only paces
+		// real-time waits such as the HTTP acquire-wait handler.)
+		timer := time.NewTimer(time.Duration(interval) * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return model.AcquireResponse{}, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
