@@ -19,5 +19,10 @@ func (m *Manager) LeaseHealth(id string) (LeaseHealth, error) {
 		return LeaseHealth{}, err
 	}
 	remaining := l.ExpiresAt - m.now()
-	return LeaseHealth{LeaseID: l.LeaseID, Resource: l.Resource, Status: l.Status, RemainingSecs: remaining, FencingToken: l.FencingToken, CanRenew: !model.IsTerminal(l.Status) && remaining >= 0}, nil
+	// Renew is only allowed once the lease has entered its renew window
+	// (remaining TTL at or below RenewWindowFraction of the original TTL),
+	// matching the gate enforced by Renew itself.
+	canRenew := !model.IsTerminal(l.Status) && remaining >= 0 &&
+		remaining <= int64(float64(l.TTLSeconds)*RenewWindowFraction)
+	return LeaseHealth{LeaseID: l.LeaseID, Resource: l.Resource, Status: l.Status, RemainingSecs: remaining, FencingToken: l.FencingToken, CanRenew: canRenew}, nil
 }
