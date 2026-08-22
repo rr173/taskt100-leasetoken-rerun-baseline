@@ -193,6 +193,45 @@ func TestCountLeasesByStatus(t *testing.T) {
 
 func lid(i int) string { return "lease-" + string(rune('0'+i)) }
 
+func TestCountHolders(t *testing.T) {
+	st := newTestStore(t)
+	tx, err := st.BeginTx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	now := int64(100)
+	seed := []model.Lease{
+		// Two distinct live holders.
+		{LeaseID: "live1", Resource: "r1", Holder: "h1", FencingToken: 1, AcquiredAt: 1, TTLSeconds: 90, ExpiresAt: now + 10, LastHeartbeat: 1, Status: model.StatusActive},
+		{LeaseID: "live2", Resource: "r2", Holder: "h2", FencingToken: 2, AcquiredAt: 2, TTLSeconds: 90, ExpiresAt: now + 5, LastHeartbeat: 2, Status: model.StatusActive},
+		// Same holder, still live: must not double-count.
+		{LeaseID: "live3", Resource: "r3", Holder: "h1", FencingToken: 3, AcquiredAt: 3, TTLSeconds: 90, ExpiresAt: now + 20, LastHeartbeat: 3, Status: model.StatusActive},
+		// Logically expired but status still active (not swept yet).
+		{LeaseID: "stale1", Resource: "r4", Holder: "h3", FencingToken: 4, AcquiredAt: 4, TTLSeconds: 10, ExpiresAt: now - 1, LastHeartbeat: 4, Status: model.StatusActive},
+		// Boundary: expires exactly at now -> expired per sweep semantics.
+		{LeaseID: "stale2", Resource: "r5", Holder: "h4", FencingToken: 5, AcquiredAt: 5, TTLSeconds: 10, ExpiresAt: now, LastHeartbeat: 5, Status: model.StatusActive},
+		// Released/expired rows must never count regardless of holder.
+		{LeaseID: "rel1", Resource: "r6", Holder: "h1", FencingToken: 6, AcquiredAt: 6, TTLSeconds: 90, ExpiresAt: now + 90, LastHeartbeat: 6, Status: model.StatusReleased},
+	}
+	for _, l := range seed {
+		if err := st.InsertLease(tx, l); err != nil {
+			t.Fatalf("insert %s: %v", l.LeaseID, err)
+		}
+	}
+
+	got, err := st.CountHolders(tx, now)
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	// Only h1 and h2 hold not-yet-expired active leases; h3/h4 are logically
+	// expired (stale1/stale2) and the released lease contributes nothing.
+	if got != 2 {
+		t.Fatalf("expected 2 holders, got %d", got)
+	}
+}
+
 func TestMaxOpenConnsIsOne(t *testing.T) {
 	st := newTestStore(t)
 	if got := st.db.Stats().MaxOpenConnections; got != 1 {

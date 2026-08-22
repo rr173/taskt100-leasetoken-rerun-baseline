@@ -274,11 +274,15 @@ func (s *Store) CountLeasesByStatus(tx *sql.Tx) (active, released, expired int, 
 }
 
 // CountHolders returns the number of distinct holders that currently hold an
-// active lease.
+// active, not-yet-expired lease. A lease whose status column is still active
+// but whose expires_at is at or before now is logically expired even though it
+// has not been swept to status=expired yet; such leases are excluded so the
+// count reflects only genuine live holders.
 func (s *Store) CountHolders(tx *sql.Tx, now int64) (int, error) {
 	var c int
 	err := tx.QueryRow(
-		`SELECT COUNT(DISTINCT holder) FROM leases WHERE status=?`, model.StatusActive,
+		`SELECT COUNT(DISTINCT holder) FROM leases WHERE status=? AND expires_at>?`,
+		model.StatusActive, now,
 	).Scan(&c)
 	return c, err
 }

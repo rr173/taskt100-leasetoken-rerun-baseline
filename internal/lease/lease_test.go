@@ -290,6 +290,33 @@ func TestStats(t *testing.T) {
 	}
 }
 
+func TestStatsExcludesLogicallyExpiredHolders(t *testing.T) {
+	m, clk := newManager(t)
+	// h1 grabs a lease and lets it lapse past expiry without sweeping it,
+	// so its row stays status=active but is logically expired.
+	a, err := m.Acquire("r1", "h1", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(60) // past expiry (expires_at = acquire+50, now = acquire+60)
+	// h2 holds a still-live lease.
+	if _, err := m.Acquire("r2", "h2", 100); err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Holders != 1 {
+		t.Fatalf("Holders = %d, want 1 (only live holder h2); stale-active lease of h1 must not count", s.Holders)
+	}
+	// Sanity: the stale lease is still status=active (proving it just wasn't swept).
+	l, _ := m.GetLease(a.LeaseID)
+	if l.Status != model.StatusActive {
+		t.Fatalf("precondition: stale lease status = %s, want active", l.Status)
+	}
+}
+
 func TestStaleAcquireEvictsExpired(t *testing.T) {
 	m, clk := newManager(t)
 	a, err := m.Acquire("r", "h1", 50)
